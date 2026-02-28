@@ -1,5 +1,7 @@
 # GarticLasso
 
+<img src="icons/lasso-128.png" alt="GarticLasso" width="128" />
+
 A Chrome extension that adds a **Lasso Fill** tool and a **Tapered Brush** tool to [Gartic Phone](https://garticphone.com/).
 
 Designed to work alongside the [Artist Tools for Gartic Phone](https://chromewebstore.google.com/detail/artist-tools-for-gartic-p/jimdddbdlngpncjdbfggmjieegcnjcbd) extension.
@@ -99,6 +101,10 @@ Right-click the downloaded ZIP file and select **Extract All**. Remember where y
 This creates `dist/GarticLasso-v1.0.0.zip` ready to upload to GitHub Releases.
 
 </details>
+
+## Privacy
+
+This extension collects **no user data**. See the full [Privacy Policy](PRIVACY.md).
 
 ## License
 
