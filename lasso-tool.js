@@ -88,7 +88,6 @@ GarticLasso.LassoTool = (function () {
     // Auto-close the path and fill on the game canvas
     fillPolygon();
     points = [];
-    overlay.clear();
   }
 
   function canvasPoint(e) {
@@ -152,18 +151,120 @@ GarticLasso.LassoTool = (function () {
   }
 
   function fillPolygon() {
-    const color = colorPicker.getColor();
+    // Instead of drawing directly on the canvas (which Gartic Phone doesn't record),
+    // we simulate pointer events so the game captures the fill as real strokes.
+    const scanlines = rasterizePolygon(points);
 
-    gameCtx.save();
-    gameCtx.fillStyle = color;
-    gameCtx.beginPath();
-    gameCtx.moveTo(points[0].x, points[0].y);
+    // Show a progress overlay while filling
+    overlay.ctx.save();
+    overlay.ctx.fillStyle = 'rgba(74, 108, 247, 0.15)';
+    overlay.ctx.beginPath();
+    overlay.ctx.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i++) {
-      gameCtx.lineTo(points[i].x, points[i].y);
+      overlay.ctx.lineTo(points[i].x, points[i].y);
     }
-    gameCtx.closePath();
-    gameCtx.fill();
-    gameCtx.restore();
+    overlay.ctx.closePath();
+    overlay.ctx.fill();
+    overlay.ctx.restore();
+
+    simulateFillStrokes(scanlines).then(() => {
+      overlay.clear();
+    });
+  }
+
+  // Rasterize polygon into horizontal scanlines
+  function rasterizePolygon(poly) {
+    const lines = [];
+    let minY = Infinity, maxY = -Infinity;
+
+    for (const p of poly) {
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+
+    minY = Math.ceil(minY);
+    maxY = Math.floor(maxY);
+    const step = 2; // pixel gap between scanlines (matches typical brush size)
+
+    for (let y = minY; y <= maxY; y += step) {
+      const intersections = [];
+      const n = poly.length;
+
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const yi = poly[i].y, yj = poly[j].y;
+        const xi = poly[i].x, xj = poly[j].x;
+
+        if ((yi <= y && yj > y) || (yj <= y && yi > y)) {
+          const x = xi + (y - yi) / (yj - yi) * (xj - xi);
+          intersections.push(x);
+        }
+      }
+
+      intersections.sort((a, b) => a - b);
+
+      // Pair up intersections to form filled spans
+      for (let i = 0; i < intersections.length - 1; i += 2) {
+        lines.push({
+          y: y,
+          x1: Math.ceil(intersections[i]),
+          x2: Math.floor(intersections[i + 1])
+        });
+      }
+    }
+
+    return lines;
+  }
+
+  // Simulate pointer events on the game canvas to "draw" the fill scanlines
+  async function simulateFillStrokes(scanlines) {
+    const rect = gameCanvas.getBoundingClientRect();
+    const scaleX = rect.width / gameCanvas.width;
+    const scaleY = rect.height / gameCanvas.height;
+
+    for (const line of scanlines) {
+      if (line.x2 - line.x1 < 1) continue;
+
+      const startX = rect.left + line.x1 * scaleX;
+      const startY = rect.top + line.y * scaleY;
+      const endX = rect.left + line.x2 * scaleX;
+      const endY = startY;
+
+      const commonProps = {
+        bubbles: true,
+        cancelable: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+        button: 0,
+        buttons: 1,
+        pressure: 0.5,
+        isPrimary: true
+      };
+
+      gameCanvas.dispatchEvent(new PointerEvent('pointerdown', {
+        ...commonProps, clientX: startX, clientY: startY
+      }));
+
+      // Move across the scanline in steps
+      const stepPx = 4;
+      const dx = endX - startX;
+      const steps = Math.max(Math.ceil(Math.abs(dx) / stepPx), 1);
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        gameCanvas.dispatchEvent(new PointerEvent('pointermove', {
+          ...commonProps,
+          clientX: startX + dx * t,
+          clientY: endY
+        }));
+      }
+
+      gameCanvas.dispatchEvent(new PointerEvent('pointerup', {
+        ...commonProps, clientX: endX, clientY: endY, buttons: 0
+      }));
+
+      // Small delay between scanlines to avoid overwhelming the event queue
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
 
   function destroy() {
