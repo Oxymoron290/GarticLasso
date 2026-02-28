@@ -1,4 +1,5 @@
-// tapered-brush.js — Tapered brush tool: variable-width strokes based on pressure or speed
+// tapered-brush.js — Tapered brush tool: variable-width strokes recorded through Gartic Phone's system
+// Captures stroke on overlay, then replays with varying brush sizes via synthetic events
 
 window.GarticLasso = window.GarticLasso || {};
 
@@ -6,28 +7,29 @@ GarticLasso.TaperedBrush = (function () {
   'use strict';
 
   let gameCanvas = null;
-  let gameCtx = null;
   let overlay = null;
   let colorPicker = null;
   let isActive = false;
   let isDrawing = false;
+  let isReplaying = false;
 
-  // Stroke state
-  let rawPoints = [];       // Raw input points with timestamps and pressure
-  let smoothPoints = [];    // Smoothed points for rendering
+  let smoothPoints = [];
+  let lastRawPoint = null;
 
-  // Configuration
-  const MIN_WIDTH = 1;
-  const MAX_WIDTH = 16;
-  const SMOOTHING_FACTOR = 0.3; // Lower = smoother, higher = more responsive
-  const VELOCITY_SCALE = 0.08;  // How much velocity affects width
+  const MIN_WIDTH = 2;
+  const MAX_WIDTH = 18;
+  const SMOOTHING_FACTOR = 0.3;
+  const VELOCITY_SCALE = 0.08;
+  const WIDTH_SMOOTH_WINDOW = 5;
+  const MIN_RUN_LENGTH = 4;
+  const TAPER_POINTS = 5;
+
+  const PEN_TOOL_SELECTOR = '.draw .tool.pen';
 
   function init(canvas, overlayInstance, colorPickerInstance) {
     gameCanvas = canvas;
-    gameCtx = canvas.getContext('2d');
     overlay = overlayInstance;
     colorPicker = colorPickerInstance;
-
     return { activate, deactivate, destroy };
   }
 
@@ -44,8 +46,9 @@ GarticLasso.TaperedBrush = (function () {
   function deactivate() {
     isActive = false;
     isDrawing = false;
-    rawPoints = [];
+    isReplaying = false;
     smoothPoints = [];
+    lastRawPoint = null;
     overlay.deactivate();
     overlay.canvas.removeEventListener('pointerdown', onPointerDown);
     overlay.canvas.removeEventListener('pointermove', onPointerMove);
@@ -55,14 +58,14 @@ GarticLasso.TaperedBrush = (function () {
   }
 
   function onPointerDown(e) {
-    if (!isActive || e.button !== 0) return;
+    if (!isActive || e.button !== 0 || isReplaying) return;
     isDrawing = true;
-    rawPoints = [];
     smoothPoints = [];
+    lastRawPoint = null;
 
-    const pt = capturePoint(e);
-    rawPoints.push(pt);
-    smoothPoints.push({ x: pt.x, y: pt.y, width: calcWidth(pt) });
+    const pt = canvasPoint(e);
+    lastRawPoint = { ...pt, time: performance.now() };
+    smoothPoints.push({ x: pt.x, y: pt.y, width: (MIN_WIDTH + MAX_WIDTH) / 2 });
 
     overlay.canvas.setPointerCapture(e.pointerId);
   }
@@ -70,115 +73,267 @@ GarticLasso.TaperedBrush = (function () {
   function onPointerMove(e) {
     if (!isDrawing) return;
 
-    const pt = capturePoint(e);
-    rawPoints.push(pt);
-
-    // Apply exponential smoothing to position
+    const pt = canvasPoint(e);
     const prev = smoothPoints[smoothPoints.length - 1];
-    const smoothed = {
+    const dx = pt.x - prev.x;
+    const dy = pt.y - prev.y;
+    if (dx * dx + dy * dy < 4) return;
+
+    const now = performance.now();
+    const width = calcWidth(pt, now);
+
+    smoothPoints.push({
       x: lerp(prev.x, pt.x, SMOOTHING_FACTOR),
       y: lerp(prev.y, pt.y, SMOOTHING_FACTOR),
-      width: calcWidth(pt)
-    };
-    smoothPoints.push(smoothed);
+      width: width
+    });
+    lastRawPoint = { ...pt, time: now };
 
-    // Draw the new segment on the game canvas
-    if (smoothPoints.length >= 2) {
-      drawSegment(
-        smoothPoints[smoothPoints.length - 2],
-        smoothPoints[smoothPoints.length - 1]
-      );
-    }
+    renderPreview();
   }
 
   function onPointerUp(e) {
     if (!isDrawing) return;
     isDrawing = false;
 
-    // Draw tapered end
-    if (smoothPoints.length >= 2) {
-      const last = smoothPoints[smoothPoints.length - 1];
-      const taperEnd = { x: last.x, y: last.y, width: MIN_WIDTH };
-      drawSegment(last, taperEnd);
+    if (smoothPoints.length < 2) {
+      smoothPoints = [];
+      lastRawPoint = null;
+      overlay.clear();
+      return;
     }
 
-    rawPoints = [];
+    const captured = [...smoothPoints];
     smoothPoints = [];
-    overlay.clear();
+    lastRawPoint = null;
+
+    replayStroke(captured).then(() => {
+      overlay.clear();
+    });
   }
 
-  function capturePoint(e) {
+  function canvasPoint(e) {
     const rect = overlay.canvas.getBoundingClientRect();
     const scaleX = overlay.canvas.width / rect.width;
     const scaleY = overlay.canvas.height / rect.height;
     return {
       x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
-      pressure: e.pressure,
-      time: performance.now()
+      y: (e.clientY - rect.top) * scaleY
     };
   }
 
-  function calcWidth(pt) {
-    // Use pressure if available (tablet), otherwise use velocity
-    if (pt.pressure > 0 && pt.pressure < 1) {
-      return MIN_WIDTH + (MAX_WIDTH - MIN_WIDTH) * pt.pressure;
-    }
+  function calcWidth(pt, now) {
+    if (!lastRawPoint) return (MIN_WIDTH + MAX_WIDTH) / 2;
 
-    // Velocity-based: faster movement = thinner line
-    if (rawPoints.length < 2) return (MIN_WIDTH + MAX_WIDTH) / 2;
-
-    const prev = rawPoints[rawPoints.length - 2];
-    const dx = pt.x - prev.x;
-    const dy = pt.y - prev.y;
-    const dt = pt.time - prev.time;
-
+    const dx = pt.x - lastRawPoint.x;
+    const dy = pt.y - lastRawPoint.y;
+    const dt = now - lastRawPoint.time;
     if (dt === 0) return (MIN_WIDTH + MAX_WIDTH) / 2;
 
     const velocity = Math.sqrt(dx * dx + dy * dy) / dt;
     const normalizedV = Math.min(velocity * VELOCITY_SCALE, 1);
-
-    // Invert: faster = thinner
     return MAX_WIDTH - (MAX_WIDTH - MIN_WIDTH) * normalizedV;
   }
 
-  function drawSegment(from, to) {
+  // --- Preview rendering on the overlay ---
+
+  function renderPreview() {
+    const ctx = overlay.ctx;
+    overlay.clear();
+    if (smoothPoints.length < 2) return;
+
     const color = colorPicker.getColor();
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.6;
 
-    gameCtx.save();
-    gameCtx.fillStyle = color;
-    gameCtx.lineCap = 'round';
-    gameCtx.lineJoin = 'round';
+    for (let i = 1; i < smoothPoints.length; i++) {
+      const from = smoothPoints[i - 1];
+      const to = smoothPoints[i];
+      const dist = Math.sqrt((to.x - from.x) ** 2 + (to.y - from.y) ** 2);
+      const steps = Math.max(Math.ceil(dist / 4), 1);
 
-    // Draw the segment as a filled shape connecting two circles of different radii
-    // This creates the tapered effect
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        ctx.beginPath();
+        ctx.arc(
+          lerp(from.x, to.x, t),
+          lerp(from.y, to.y, t),
+          lerp(from.width, to.width, t) / 2,
+          0, Math.PI * 2
+        );
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
 
-    if (dist < 0.5) {
-      // Just draw a circle at the point
-      gameCtx.beginPath();
-      gameCtx.arc(to.x, to.y, to.width / 2, 0, Math.PI * 2);
-      gameCtx.fill();
-      gameCtx.restore();
-      return;
+  // --- Width processing for replay ---
+
+  function addTaper(points) {
+    if (points.length < 3) return points;
+    const tapered = points.map(p => ({ ...p }));
+    const taperLen = Math.min(TAPER_POINTS, Math.floor(points.length / 4));
+
+    for (let i = 0; i < taperLen; i++) {
+      const t = i / taperLen;
+      tapered[i].width = MIN_WIDTH + (tapered[i].width - MIN_WIDTH) * t;
+    }
+    for (let i = 0; i < taperLen; i++) {
+      const idx = points.length - 1 - i;
+      const t = i / taperLen;
+      tapered[idx].width = MIN_WIDTH + (tapered[idx].width - MIN_WIDTH) * t;
+    }
+    return tapered;
+  }
+
+  function smoothWidths(points) {
+    const out = points.map(p => ({ ...p }));
+    const half = Math.floor(WIDTH_SMOOTH_WINDOW / 2);
+    for (let i = 0; i < out.length; i++) {
+      let sum = 0, count = 0;
+      for (let j = Math.max(0, i - half); j <= Math.min(out.length - 1, i + half); j++) {
+        sum += points[j].width;
+        count++;
+      }
+      out[i].width = sum / count;
+    }
+    return out;
+  }
+
+  function buildSegments(points, numSizes) {
+    // Quantize widths to thickness indices
+    const indices = points.map(p => {
+      const t = Math.max(0, Math.min(1, (p.width - MIN_WIDTH) / (MAX_WIDTH - MIN_WIDTH)));
+      return Math.round(t * (numSizes - 1));
+    });
+
+    // Merge short runs into their predecessor
+    let changed = true;
+    while (changed) {
+      changed = false;
+      let runStart = 0;
+      for (let i = 1; i <= indices.length; i++) {
+        if (i === indices.length || indices[i] !== indices[runStart]) {
+          if (i - runStart < MIN_RUN_LENGTH && runStart > 0) {
+            const prev = indices[runStart - 1];
+            for (let j = runStart; j < i; j++) indices[j] = prev;
+            changed = true;
+          }
+          runStart = i;
+        }
+      }
     }
 
-    // Use catmull-rom interpolation for sub-segments
-    const steps = Math.max(Math.ceil(dist / 2), 1);
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const x = lerp(from.x, to.x, t);
-      const y = lerp(from.y, to.y, t);
-      const w = lerp(from.width, to.width, t);
+    // Group into segments with 1-point overlap at boundaries
+    const segments = [];
+    let curIdx = indices[0];
+    let segStart = 0;
 
-      gameCtx.beginPath();
-      gameCtx.arc(x, y, w / 2, 0, Math.PI * 2);
-      gameCtx.fill();
+    for (let i = 1; i <= indices.length; i++) {
+      if (i === indices.length || indices[i] !== curIdx) {
+        segments.push({
+          thicknessIdx: curIdx,
+          points: points.slice(segStart, i)
+        });
+        if (i < indices.length) {
+          curIdx = indices[i];
+          segStart = Math.max(0, i - 1); // 1-point overlap
+        }
+      }
     }
 
-    gameCtx.restore();
+    return segments;
+  }
+
+  // --- Synthetic event dispatch (same mechanism as lasso fill) ---
+
+  function dispatchMouseEvent(eventName, canvasX, canvasY) {
+    const rect = gameCanvas.getBoundingClientRect();
+    const scaleX = rect.width / gameCanvas.width;
+    const scaleY = rect.height / gameCanvas.height;
+    const globalX = rect.left + canvasX * scaleX;
+    const globalY = rect.top + canvasY * scaleY;
+
+    const container = gameCanvas.closest('[class*="drawingContainer"]') || gameCanvas.parentElement;
+
+    const event = new MouseEvent(eventName, {
+      bubbles: true, cancelable: true, view: window,
+      clientX: globalX, clientY: globalY,
+      offsetX: canvasX, offsetY: canvasY,
+      pageX: globalX + window.scrollX,
+      pageY: globalY + window.scrollY,
+      screenX: globalX, screenY: globalY,
+      movementX: 0, movementY: 0,
+      button: 0,
+      buttons: eventName === 'mouseup' ? 0 : 1
+    });
+
+    if (window.__garticLassoEvents) {
+      window.__garticLassoEvents.add(event);
+    }
+
+    container.dispatchEvent(event);
+  }
+
+  // --- Replay captured stroke through Gartic Phone ---
+
+  async function replayStroke(rawPoints) {
+    isReplaying = true;
+    overlay.deactivate();
+    window.__garticLassoBlocking = true;
+
+    try {
+      // Select pen tool
+      const pen = document.querySelector(PEN_TOOL_SELECTOR);
+      if (pen) pen.click();
+
+      const thicknessOptions = document.querySelectorAll('.draw .options > div > div');
+      const numSizes = thicknessOptions.length;
+
+      if (numSizes === 0) {
+        console.warn('[GarticLasso] No thickness options found, drawing single stroke');
+        await drawSingleStroke(rawPoints);
+        return;
+      }
+
+      // Process widths: taper endpoints, smooth, then segment
+      const tapered = addTaper(rawPoints);
+      const smoothed = smoothWidths(tapered);
+      const segments = buildSegments(smoothed, numSizes);
+
+      console.log(`[GarticLasso] Replaying tapered stroke: ${segments.length} segment(s), ${rawPoints.length} points`);
+
+      await new Promise(r => setTimeout(r, 30));
+
+      for (const seg of segments) {
+        thicknessOptions[seg.thicknessIdx].click();
+        await new Promise(r => setTimeout(r, 20));
+
+        const pts = seg.points;
+        dispatchMouseEvent('mousedown', pts[0].x, pts[0].y);
+
+        for (let i = 1; i < pts.length; i++) {
+          dispatchMouseEvent('mousemove', pts[i].x, pts[i].y);
+        }
+
+        dispatchMouseEvent('mouseup', pts[pts.length - 1].x, pts[pts.length - 1].y);
+        await new Promise(r => setTimeout(r, 10));
+      }
+    } finally {
+      window.__garticLassoBlocking = false;
+      if (isActive) overlay.activate();
+      isReplaying = false;
+      console.log('[GarticLasso] Tapered stroke complete');
+    }
+  }
+
+  async function drawSingleStroke(points) {
+    dispatchMouseEvent('mousedown', points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      dispatchMouseEvent('mousemove', points[i].x, points[i].y);
+    }
+    dispatchMouseEvent('mouseup', points[points.length - 1].x, points[points.length - 1].y);
   }
 
   function lerp(a, b, t) {
@@ -188,7 +343,6 @@ GarticLasso.TaperedBrush = (function () {
   function destroy() {
     deactivate();
     gameCanvas = null;
-    gameCtx = null;
     overlay = null;
     colorPicker = null;
   }
