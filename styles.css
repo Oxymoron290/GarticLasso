@@ -1,0 +1,76 @@
+/* styles.css — GarticLasso extension UI styles */
+
+/* Floating toolbar */
+#gartic-lasso-toolbar {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: #2a2a2e;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  border: 1px solid #444;
+  user-select: none;
+}
+
+/* Injected toolbar container */
+.gartic-lasso-injected {
+  display: flex;
+  gap: 4px;
+  padding: 0 6px;
+  border-left: 1px solid #555;
+  margin-left: 6px;
+}
+
+/* Drag handle */
+.gartic-lasso-drag-handle {
+  text-align: center;
+  cursor: grab;
+  color: #888;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 0;
+  letter-spacing: 2px;
+}
+
+.gartic-lasso-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Tool buttons */
+.gartic-lasso-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #ccc;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.gartic-lasso-btn:hover {
+  background: #3a3a3e;
+  color: #fff;
+}
+
+.gartic-lasso-btn.active {
+  background: #4a6cf7;
+  color: #fff;
+}
+
+.gartic-lasso-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Overlay canvas (cursor styles applied via JS) */
+#gartic-lasso-overlay {
+  cursor: crosshair;
+}

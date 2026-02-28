@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "GarticLasso",
+  "version": "1.0.0",
+  "description": "Adds a lasso fill tool and tapered brush to Gartic Phone",
+  "icons": {
+    "16": "icons/lasso-16.png",
+    "48": "icons/lasso-48.png",
+    "128": "icons/lasso-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://garticphone.com/*"],
+      "js": [
+        "color-picker.js",
+        "overlay.js",
+        "lasso-tool.js",
+        "tapered-brush.js",
+        "toolbar.js",
+        "content.js"
+      ],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": []
+}
