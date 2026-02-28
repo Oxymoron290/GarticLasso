@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest version
+        run: |
+          jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+
+      - name: Package extension
+        run: |
+          mkdir -p dist/GarticLasso
+          cp manifest.json early-inject.js content.js overlay.js lasso-tool.js \
+             tapered-brush.js toolbar.js color-picker.js styles.css dist/GarticLasso/
+          cp -r icons dist/GarticLasso/
+          cd dist && zip -r "GarticLasso-v${{ steps.version.outputs.version }}.zip" GarticLasso/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarticLasso-v${{ steps.version.outputs.version }}
+          path: dist/GarticLasso/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/GarticLasso-v${{ steps.version.outputs.version }}.zip
+          generate_release_notes: true
