@@ -1,0 +1,1 @@
+I do not collect, store, transfer or sell any of your data, it's just a lasso tool, chill.
