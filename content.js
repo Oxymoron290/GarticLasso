@@ -8,7 +8,34 @@
   let initialized = false;
   let gameCanvas = null;
 
+  function isDrawingScreen() {
+    // Gartic Phone shows drawing tools (color palette, brush size, etc.) only on draw screens.
+    // The reveals/book page has a canvas but no drawing toolbar.
+    const hasDrawingToolbar = document.querySelector(
+      '[class*="tools" i][class*="draw" i], ' +
+      '[class*="toolbar" i][class*="draw" i], ' +
+      '[class*="color" i][class*="palette" i], ' +
+      '[class*="drawingArea" i], ' +
+      '[class*="drawing-area" i]'
+    );
+    if (hasDrawingToolbar) return true;
+
+    // Fallback: check URL path
+    const path = window.location.pathname.toLowerCase();
+    if (path.includes('/book') || path.includes('/reveal')) return false;
+
+    // Fallback: check for color swatches near the canvas (drawing screens have them)
+    const colorSwatches = document.querySelectorAll(
+      '[class*="color" i]:not([class*="lasso"])'
+    );
+    const hasMultipleColors = colorSwatches.length >= 5;
+    return hasMultipleColors;
+  }
+
   function findDrawingCanvas() {
+    // Only look for canvas on drawing screens
+    if (!isDrawingScreen()) return null;
+
     // Gartic Phone uses a canvas element for drawing
     // Look for the main drawing canvas (typically the largest visible canvas)
     const canvases = document.querySelectorAll('canvas');
