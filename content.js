@@ -96,13 +96,19 @@
   }
 
   // Watch for canvas appearing/disappearing (SPA navigation)
+  let mutationTimer = null;
   const observer = new MutationObserver(() => {
-    const canvas = findDrawingCanvas();
-    if (canvas && !initialized) {
-      initExtension(canvas);
-    } else if (!canvas && initialized) {
-      teardown();
-    }
+    // Debounce: Gartic Phone's React causes many rapid DOM mutations
+    if (mutationTimer) return;
+    mutationTimer = setTimeout(() => {
+      mutationTimer = null;
+      const canvas = findDrawingCanvas();
+      if (canvas && !initialized) {
+        initExtension(canvas);
+      } else if (!canvas && initialized) {
+        teardown();
+      }
+    }, 300);
   });
 
   observer.observe(document.body, { childList: true, subtree: true });

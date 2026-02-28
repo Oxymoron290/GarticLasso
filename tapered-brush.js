@@ -12,9 +12,13 @@ GarticLasso.TaperedBrush = (function () {
   let isActive = false;
   let isDrawing = false;
   let isReplaying = false;
+  let undoInProgress = false;
 
   let smoothPoints = [];
   let lastRawPoint = null;
+
+  // Track segment counts per stroke so undo can remove the whole tapered stroke
+  let strokeHistory = [];
 
   const MIN_WIDTH = 2;
   const MAX_WIDTH = 18;
@@ -41,6 +45,7 @@ GarticLasso.TaperedBrush = (function () {
     overlay.canvas.addEventListener('pointerup', onPointerUp);
     overlay.canvas.addEventListener('pointerleave', onPointerUp);
     overlay.canvas.style.cursor = 'crosshair';
+    setupUndoInterceptor();
   }
 
   function deactivate() {
@@ -55,6 +60,7 @@ GarticLasso.TaperedBrush = (function () {
     overlay.canvas.removeEventListener('pointerup', onPointerUp);
     overlay.canvas.removeEventListener('pointerleave', onPointerUp);
     overlay.canvas.style.cursor = '';
+    teardownUndoInterceptor();
   }
 
   function onPointerDown(e) {
@@ -133,6 +139,73 @@ GarticLasso.TaperedBrush = (function () {
     const velocity = Math.sqrt(dx * dx + dy * dy) / dt;
     const normalizedV = Math.min(velocity * VELOCITY_SCALE, 1);
     return MAX_WIDTH - (MAX_WIDTH - MIN_WIDTH) * normalizedV;
+  }
+
+  // --- Undo interception: undo all segments of a tapered stroke at once ---
+
+  function findUndoButton() {
+    return document.querySelector('.draw .tool.undo') ||
+           document.querySelector('[class*="undo" i]:not([class*="redo" i])');
+  }
+
+  function setupUndoInterceptor() {
+    const undoBtn = findUndoButton();
+    if (undoBtn) {
+      undoBtn.addEventListener('click', onUndoClick, { capture: true });
+    }
+    document.addEventListener('keydown', onUndoKeyDown, { capture: true });
+  }
+
+  function teardownUndoInterceptor() {
+    const undoBtn = findUndoButton();
+    if (undoBtn) {
+      undoBtn.removeEventListener('click', onUndoClick, { capture: true });
+    }
+    document.removeEventListener('keydown', onUndoKeyDown, { capture: true });
+    strokeHistory = [];
+  }
+
+  function onUndoClick(e) {
+    if (undoInProgress || isReplaying || strokeHistory.length === 0) return;
+    const segCount = strokeHistory[strokeHistory.length - 1];
+    if (segCount <= 1) {
+      strokeHistory.pop();
+      return; // Normal undo handles it
+    }
+    // Let the first undo proceed naturally, then fire extra undos
+    strokeHistory.pop();
+    triggerExtraUndos(segCount - 1);
+  }
+
+  function onUndoKeyDown(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.key !== 'z' || e.shiftKey) return;
+    if (undoInProgress || isReplaying || strokeHistory.length === 0) return;
+    const segCount = strokeHistory[strokeHistory.length - 1];
+    if (segCount <= 1) {
+      strokeHistory.pop();
+      return;
+    }
+    strokeHistory.pop();
+    triggerExtraUndos(segCount - 1);
+  }
+
+  function triggerExtraUndos(count) {
+    undoInProgress = true;
+    const undoBtn = findUndoButton();
+    let remaining = count;
+
+    function doNext() {
+      if (remaining <= 0) {
+        undoInProgress = false;
+        return;
+      }
+      remaining--;
+      if (undoBtn) {
+        undoBtn.click();
+      }
+      setTimeout(doNext, 30);
+    }
+    setTimeout(doNext, 50);
   }
 
   // --- Preview rendering on the overlay ---
@@ -294,6 +367,7 @@ GarticLasso.TaperedBrush = (function () {
       if (numSizes === 0) {
         console.warn('[GarticLasso] No thickness options found, drawing single stroke');
         await drawSingleStroke(rawPoints);
+        strokeHistory.push(1);
         return;
       }
 
@@ -320,6 +394,8 @@ GarticLasso.TaperedBrush = (function () {
         dispatchMouseEvent('mouseup', pts[pts.length - 1].x, pts[pts.length - 1].y);
         await new Promise(r => setTimeout(r, 10));
       }
+
+      strokeHistory.push(segments.length);
     } finally {
       window.__garticLassoBlocking = false;
       if (isActive) overlay.activate();

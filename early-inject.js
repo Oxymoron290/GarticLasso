@@ -4,39 +4,54 @@
 (function () {
   'use strict';
 
-  // Track events dispatched by GarticLasso
   window.__garticLassoEvents = new WeakSet();
-
-  // When true, block real (trusted) mouse events from reaching Gartic Phone
   window.__garticLassoBlocking = false;
 
-  const origAddEventListener = EventTarget.prototype.addEventListener;
+  const WRAPPED_TYPES = new Set(['mousedown', 'mousemove', 'mouseup']);
+
+  // Map original listeners → wrapped versions for proper removeEventListener support
+  const listenerMap = new WeakMap();
+
+  const origAdd = EventTarget.prototype.addEventListener;
+  const origRemove = EventTarget.prototype.removeEventListener;
 
   EventTarget.prototype.addEventListener = function (type, listener, options) {
-    // Only wrap drawing-related mouse events
-    if (['mousedown', 'mousemove', 'mouseup'].includes(type) && typeof listener === 'function') {
-      const origListener = listener;
-      const wrappedListener = function (event) {
-        // Block real mouse events during fill operations
-        if (event.isTrusted && window.__garticLassoBlocking) {
-          return;
-        }
-
-        // If this is a GarticLasso synthetic event, proxy it with isTrusted: true
-        if (!event.isTrusted && window.__garticLassoEvents.has(event)) {
-          const proxy = new Proxy(event, {
-            get(target, prop) {
-              if (prop === 'isTrusted') return true;
-              const val = Reflect.get(target, prop);
-              return typeof val === 'function' ? val.bind(target) : val;
-            }
-          });
-          return origListener.call(this, proxy);
-        }
-        return origListener.call(this, event);
-      };
-      return origAddEventListener.call(this, type, wrappedListener, options);
+    if (WRAPPED_TYPES.has(type) && typeof listener === 'function') {
+      let wrapped = listenerMap.get(listener);
+      if (!wrapped) {
+        wrapped = function (event) {
+          // Fast path: trusted event, no blocking — call directly
+          if (event.isTrusted) {
+            if (window.__garticLassoBlocking) return;
+            return listener.call(this, event);
+          }
+          // Our synthetic event — proxy isTrusted
+          if (window.__garticLassoEvents.has(event)) {
+            const proxy = new Proxy(event, {
+              get(target, prop) {
+                if (prop === 'isTrusted') return true;
+                const val = Reflect.get(target, prop);
+                return typeof val === 'function' ? val.bind(target) : val;
+              }
+            });
+            return listener.call(this, proxy);
+          }
+          return listener.call(this, event);
+        };
+        listenerMap.set(listener, wrapped);
+      }
+      return origAdd.call(this, type, wrapped, options);
     }
-    return origAddEventListener.call(this, type, listener, options);
+    return origAdd.call(this, type, listener, options);
+  };
+
+  EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    if (WRAPPED_TYPES.has(type) && typeof listener === 'function') {
+      const wrapped = listenerMap.get(listener);
+      if (wrapped) {
+        return origRemove.call(this, type, wrapped, options);
+      }
+    }
+    return origRemove.call(this, type, listener, options);
   };
 })();
