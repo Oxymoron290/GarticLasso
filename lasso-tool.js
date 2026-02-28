@@ -6,20 +6,22 @@ GarticLasso.LassoTool = (function () {
   'use strict';
 
   let gameCanvas = null;
-  let gameCtx = null;
   let overlay = null;
   let colorPicker = null;
   let isActive = false;
   let isDrawing = false;
+  let isFilling = false;
   let points = [];
 
   // Dash animation state
   let dashOffset = 0;
   let animFrameId = null;
 
+  // Gartic Phone UI selectors
+  const PEN_TOOL_SELECTOR = '.draw .tool.pen';
+
   function init(canvas, overlayInstance, colorPickerInstance) {
     gameCanvas = canvas;
-    gameCtx = canvas.getContext('2d');
     overlay = overlayInstance;
     colorPicker = colorPickerInstance;
 
@@ -50,7 +52,7 @@ GarticLasso.LassoTool = (function () {
   }
 
   function onPointerDown(e) {
-    if (!isActive || e.button !== 0) return;
+    if (!isActive || e.button !== 0 || isFilling) return;
     isDrawing = true;
     points = [];
 
@@ -85,8 +87,11 @@ GarticLasso.LassoTool = (function () {
       return;
     }
 
-    // Auto-close the path and fill on the game canvas
-    fillPolygon();
+    // Show fill preview then execute
+    showFillPreview();
+    fillPolygon([...points]).then(() => {
+      overlay.clear();
+    });
     points = [];
   }
 
@@ -128,13 +133,12 @@ GarticLasso.LassoTool = (function () {
       ctx.lineTo(points[i].x, points[i].y);
     }
 
-    // Show closing line back to start
     if (points.length > 2) {
       ctx.lineTo(points[0].x, points[0].y);
     }
     ctx.stroke();
 
-    // Draw a second pass with dark color for contrast (marching ants effect)
+    // Marching ants contrast pass
     ctx.strokeStyle = '#000000';
     ctx.lineDashOffset = -dashOffset + 5;
     ctx.beginPath();
@@ -150,30 +154,61 @@ GarticLasso.LassoTool = (function () {
     ctx.restore();
   }
 
-  function fillPolygon() {
-    // Instead of drawing directly on the canvas (which Gartic Phone doesn't record),
-    // we simulate pointer events so the game captures the fill as real strokes.
-    const scanlines = rasterizePolygon(points);
-
-    // Show a progress overlay while filling
-    overlay.ctx.save();
-    overlay.ctx.fillStyle = 'rgba(74, 108, 247, 0.15)';
-    overlay.ctx.beginPath();
-    overlay.ctx.moveTo(points[0].x, points[0].y);
+  function showFillPreview() {
+    const ctx = overlay.ctx;
+    overlay.clear();
+    ctx.save();
+    ctx.fillStyle = 'rgba(74, 108, 247, 0.2)';
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i++) {
-      overlay.ctx.lineTo(points[i].x, points[i].y);
+      ctx.lineTo(points[i].x, points[i].y);
     }
-    overlay.ctx.closePath();
-    overlay.ctx.fill();
-    overlay.ctx.restore();
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
 
-    simulateFillStrokes(scanlines).then(() => {
-      overlay.clear();
+  // Dispatch a MouseEvent through Gartic Phone's drawing system
+  // Events are dispatched on drawingContainer where Gartic Phone's listeners are attached
+  function dispatchMouseEvent(eventName, canvasX, canvasY) {
+    const rect = gameCanvas.getBoundingClientRect();
+    const scaleX = rect.width / gameCanvas.width;
+    const scaleY = rect.height / gameCanvas.height;
+    const globalX = rect.left + canvasX * scaleX;
+    const globalY = rect.top + canvasY * scaleY;
+
+    // Find the drawingContainer (parent of the canvas with the event listeners)
+    const container = gameCanvas.closest('[class*="drawingContainer"]') || gameCanvas.parentElement;
+
+    const event = new MouseEvent(eventName, {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: globalX,
+      clientY: globalY,
+      offsetX: canvasX,
+      offsetY: canvasY,
+      pageX: globalX + window.scrollX,
+      pageY: globalY + window.scrollY,
+      screenX: globalX,
+      screenY: globalY,
+      movementX: 0,
+      movementY: 0,
+      button: 0,
+      buttons: eventName === 'mouseup' ? 0 : 1
     });
+
+    // Mark for the early-inject proxy to make it appear trusted
+    if (window.__garticLassoEvents) {
+      window.__garticLassoEvents.add(event);
+    }
+
+    container.dispatchEvent(event);
   }
 
   // Rasterize polygon into horizontal scanlines
-  function rasterizePolygon(poly) {
+  function rasterizePolygon(poly, step) {
     const lines = [];
     let minY = Infinity, maxY = -Infinity;
 
@@ -184,7 +219,6 @@ GarticLasso.LassoTool = (function () {
 
     minY = Math.ceil(minY);
     maxY = Math.floor(maxY);
-    const step = 2; // pixel gap between scanlines (matches typical brush size)
 
     for (let y = minY; y <= maxY; y += step) {
       const intersections = [];
@@ -203,7 +237,6 @@ GarticLasso.LassoTool = (function () {
 
       intersections.sort((a, b) => a - b);
 
-      // Pair up intersections to form filled spans
       for (let i = 0; i < intersections.length - 1; i += 2) {
         lines.push({
           y: y,
@@ -216,61 +249,79 @@ GarticLasso.LassoTool = (function () {
     return lines;
   }
 
-  // Simulate pointer events on the game canvas to "draw" the fill scanlines
-  async function simulateFillStrokes(scanlines) {
-    const rect = gameCanvas.getBoundingClientRect();
-    const scaleX = rect.width / gameCanvas.width;
-    const scaleY = rect.height / gameCanvas.height;
+  // Select Gartic Phone's pen tool and find the largest brush size
+  function setupBrushForFill() {
+    // Select pen tool
+    const pen = document.querySelector(PEN_TOOL_SELECTOR);
+    if (pen) pen.click();
 
-    for (const line of scanlines) {
-      if (line.x2 - line.x1 < 1) continue;
+    // Select the LARGEST brush size for fewer scanlines
+    const thicknessOptions = document.querySelectorAll('.draw .options > div > div');
+    if (thicknessOptions.length > 0) {
+      thicknessOptions[thicknessOptions.length - 1].click();
+    }
+  }
 
-      const startX = rect.left + line.x1 * scaleX;
-      const startY = rect.top + line.y * scaleY;
-      const endX = rect.left + line.x2 * scaleX;
-      const endY = startY;
+  // Fill the polygon by simulating mouse events through Gartic Phone's drawing system
+  // Uses a single continuous zigzag stroke to minimize the stroke count
+  async function fillPolygon(poly) {
+    isFilling = true;
 
-      const commonProps = {
-        bubbles: true,
-        cancelable: true,
-        pointerType: 'mouse',
-        pointerId: 1,
-        button: 0,
-        buttons: 1,
-        pressure: 0.5,
-        isPrimary: true
-      };
+    // Hide overlay and block real mouse input during fill
+    overlay.deactivate();
+    window.__garticLassoBlocking = true;
 
-      gameCanvas.dispatchEvent(new PointerEvent('pointerdown', {
-        ...commonProps, clientX: startX, clientY: startY
-      }));
+    try {
+      // Set up pen tool with largest brush
+      setupBrushForFill();
+      await new Promise(r => setTimeout(r, 50));
 
-      // Move across the scanline in steps
-      const stepPx = 4;
-      const dx = endX - startX;
-      const steps = Math.max(Math.ceil(Math.abs(dx) / stepPx), 1);
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps;
-        gameCanvas.dispatchEvent(new PointerEvent('pointermove', {
-          ...commonProps,
-          clientX: startX + dx * t,
-          clientY: endY
-        }));
+      const SCANLINE_STEP = 8;
+      const scanlines = rasterizePolygon(poly, SCANLINE_STEP);
+      console.log('[GarticLasso] Filling with', scanlines.length, 'scanlines (single stroke)');
+
+      if (scanlines.length === 0) return;
+
+      // Start a single continuous stroke at the first scanline
+      dispatchMouseEvent('mousedown', scanlines[0].x1, scanlines[0].y);
+
+      for (let i = 0; i < scanlines.length; i++) {
+        const line = scanlines[i];
+        const isEven = i % 2 === 0;
+
+        const startX = isEven ? line.x1 : line.x2;
+        const endX = isEven ? line.x2 : line.x1;
+
+        dispatchMouseEvent('mousemove', startX, line.y);
+
+        const dx = endX - startX;
+        const movePx = 12;
+        const steps = Math.max(Math.ceil(Math.abs(dx) / movePx), 1);
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          dispatchMouseEvent('mousemove', startX + dx * t, line.y);
+        }
+
+        if (i % 6 === 0) {
+          await new Promise(r => setTimeout(r, 5));
+        }
       }
 
-      gameCanvas.dispatchEvent(new PointerEvent('pointerup', {
-        ...commonProps, clientX: endX, clientY: endY, buttons: 0
-      }));
+      const lastLine = scanlines[scanlines.length - 1];
+      dispatchMouseEvent('mouseup', lastLine.x2, lastLine.y);
 
-      // Small delay between scanlines to avoid overwhelming the event queue
-      await new Promise(r => setTimeout(r, 0));
+    } finally {
+      // Always re-enable mouse input
+      window.__garticLassoBlocking = false;
+      if (isActive) overlay.activate();
+      isFilling = false;
+      console.log('[GarticLasso] Fill complete');
     }
   }
 
   function destroy() {
     deactivate();
     gameCanvas = null;
-    gameCtx = null;
     overlay = null;
     colorPicker = null;
   }

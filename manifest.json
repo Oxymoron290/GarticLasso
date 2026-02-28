@@ -11,6 +11,17 @@
   "content_scripts": [
     {
       "matches": ["*://garticphone.com/*"],
+      "js": ["early-inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://garticphone.com/*"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://garticphone.com/*"],
       "js": [
         "color-picker.js",
         "overlay.js",
@@ -19,8 +30,8 @@
         "toolbar.js",
         "content.js"
       ],
-      "css": ["styles.css"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "permissions": []

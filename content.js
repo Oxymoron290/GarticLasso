@@ -36,13 +36,21 @@
     // Only look for canvas on drawing screens
     if (!isDrawingScreen()) return null;
 
-    // Gartic Phone uses a canvas element for drawing
-    // Look for the main drawing canvas (typically the largest visible canvas)
-    const canvases = document.querySelectorAll('canvas');
+    // Gartic Phone has multiple canvases in drawingContainer.
+    // The last non-overlay canvas is the drawing surface.
+    const canvases = document.querySelectorAll(
+      '[class*="drawingContainer"] canvas:not(#gartic-lasso-overlay)'
+    );
+    if (canvases.length > 0) {
+      return canvases[canvases.length - 1];
+    }
+
+    // Fallback: look for the largest visible canvas
+    const allCanvases = document.querySelectorAll('canvas');
     let best = null;
     let bestArea = 0;
 
-    for (const c of canvases) {
+    for (const c of allCanvases) {
       const rect = c.getBoundingClientRect();
       const area = rect.width * rect.height;
       if (area > bestArea && rect.width > 100 && rect.height > 100) {

@@ -15,6 +15,7 @@ New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 # Copy extension files
 $files = @(
     "manifest.json",
+    "early-inject.js",
     "content.js",
     "overlay.js",
     "lasso-tool.js",
